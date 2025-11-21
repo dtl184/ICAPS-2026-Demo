@@ -2,24 +2,25 @@ import pygame
 import socket
 import time
 
-TURTLEBOT_IP = "172.20.10.3"   # <- use the IP that pings
+TURTLEBOT_IP = "10.5.14.114"   # <-- PUT YOUR ROBOT IP HERE
 TURTLEBOT_PORT = 5005
 
-FORWARD_SPEED = 0.20   # m/s
-BACKWARD_SPEED = -0.20
+MAX_LINEAR = 0.25      # m/s
+MAX_ANGULAR = 1.5      # rad/s
 
 def main():
     pygame.init()
     pygame.joystick.init()
 
     if pygame.joystick.get_count() == 0:
-        print("No controller detected")
+        print("No controller found.")
         return
 
     js = pygame.joystick.Joystick(0)
     js.init()
+
     print("Using controller:", js.get_name())
-    print("Axes:", js.get_numaxes(), "Buttons:", js.get_numbuttons())
+    print("Axes =", js.get_numaxes(), "Buttons =", js.get_numbuttons())
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -27,28 +28,28 @@ def main():
         while True:
             pygame.event.pump()
 
-            # use the axis index that changed in joystick_debug (likely 1)
-            ly = js.get_axis(1)   # left stick vertical
+            # left stick vertical = axis 1
+            ly = js.get_axis(1)
+            # left stick horizontal = axis 0
+            lx = js.get_axis(0)
 
-            # default: stop
-            linear = 0.0
+            # deadzones
+            if abs(ly) < 0.12: ly = 0.0
+            if abs(lx) < 0.12: lx = 0.0
 
-            # if pushed forward enough, go full 0.2 m/s
-            if ly < -0.3:               # stick up
-                linear = FORWARD_SPEED
-            elif ly > 0.3:              # stick down
-                linear = BACKWARD_SPEED
+            linear = -ly * MAX_LINEAR
+            angular = -lx * MAX_ANGULAR   # left = positive angular
 
-            msg = f"{linear:.3f} 0.000"
-            sock.sendto(msg.encode("utf-8"), (TURTLEBOT_IP, TURTLEBOT_PORT))
-            print("send:", msg, "  raw ly:", f"{ly:.2f}", end="\r")
+            msg = f"{linear:.3f} {angular:.3f}"
+            sock.sendto(msg.encode(), (TURTLEBOT_IP, TURTLEBOT_PORT))
 
+            print("SEND:", msg, end="\r")
             time.sleep(0.05)
 
     except KeyboardInterrupt:
-        print("\nExiting teleop client.")
+        print("\nStopping teleop.")
+
     finally:
-        js.quit()
         pygame.quit()
 
 if __name__ == "__main__":
