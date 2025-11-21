@@ -2,24 +2,24 @@ import pygame
 import socket
 import time
 
-TURTLEBOT_IP = "10.5.14.114"   # <-- PUT YOUR TURTLEBOT'S IP HERE
+TURTLEBOT_IP = "172.20.10.3"   # <- use the IP that pings
 TURTLEBOT_PORT = 5005
 
-# Max speeds (tune these!)
-MAX_LINEAR = 0.3   # m/s
-MAX_ANGULAR = 1.0  # rad/s
+FORWARD_SPEED = 0.20   # m/s
+BACKWARD_SPEED = -0.20
 
 def main():
     pygame.init()
     pygame.joystick.init()
 
     if pygame.joystick.get_count() == 0:
-        print("No controller detected. Plug in the Xbox controller and try again.")
+        print("No controller detected")
         return
 
     js = pygame.joystick.Joystick(0)
     js.init()
-    print(f"Using controller: {js.get_name()}")
+    print("Using controller:", js.get_name())
+    print("Axes:", js.get_numaxes(), "Buttons:", js.get_numbuttons())
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -27,32 +27,26 @@ def main():
         while True:
             pygame.event.pump()
 
-            # Typical Xbox mapping in pygame:
-            # axis 1: left stick vertical (up = -1, down = +1)
-            # axis 0: left stick horizontal
-            # axis 4: right stick horizontal (on some controllers)
-            # We'll use left stick Y for linear, left stick X for angular
-            ly = js.get_axis(1)   # forward/back
-            lx = js.get_axis(0)   # left/right turn
+            # use the axis index that changed in joystick_debug (likely 1)
+            ly = js.get_axis(1)   # left stick vertical
 
-            # Deadzone
-            if abs(ly) < 0.15:
-                ly = 0.0
-            if abs(lx) < 0.15:
-                lx = 0.0
+            # default: stop
+            linear = 0.0
 
-            # Map to velocities
-            linear = -ly * MAX_LINEAR      # up on stick = forward
-            angular = -lx * MAX_ANGULAR    # left on stick = positive turn
+            # if pushed forward enough, go full 0.2 m/s
+            if ly < -0.3:               # stick up
+                linear = FORWARD_SPEED
+            elif ly > 0.3:              # stick down
+                linear = BACKWARD_SPEED
 
-            # pack as simple text "v omega"
-            msg = f"{linear:.3f} {angular:.3f}"
+            msg = f"{linear:.3f} 0.000"
             sock.sendto(msg.encode("utf-8"), (TURTLEBOT_IP, TURTLEBOT_PORT))
+            print("send:", msg, "  raw ly:", f"{ly:.2f}", end="\r")
 
-            time.sleep(0.03)  # ~30 Hz
+            time.sleep(0.05)
 
     except KeyboardInterrupt:
-        print("Exiting teleop client.")
+        print("\nExiting teleop client.")
     finally:
         js.quit()
         pygame.quit()

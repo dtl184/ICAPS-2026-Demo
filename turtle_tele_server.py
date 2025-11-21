@@ -2,14 +2,13 @@ import serial
 import socket
 import time
 
-PORT = "/dev/ttyUSB1"    # we know this is the Kobuki
+PORT = "/dev/ttyUSB1"    # Kobuki base
 BAUD = 115200
 
 UDP_PORT = 5005          # must match the client
 UDP_IP = "0.0.0.0"       # listen on all interfaces
 
-# Safety: stop if no command for this long
-COMMAND_TIMEOUT = 0.5    # seconds
+COMMAND_TIMEOUT = 0.5    # safety: stop if no command for this long (seconds)
 
 def make_packet(subpayload):
     """
@@ -31,11 +30,21 @@ def make_packet(subpayload):
     buf.append(cs)
     return bytes(buf)
 
-def send_velocity(ser, linear_m_s, angular_rad_s=0.0):
+def motors_on(ser, on=True):
+    """
+    Enable/disable Kobuki motors.
+    ID = 0x04 (Motor Power), LEN = 2, payload=[state, 0x00]
+    state = 0x01 -> on, 0x00 -> off
+    """
+    state = 0x01 if on else 0x00
+    subpayload = bytes([0x04, 0x02, state, 0x00])
+    pkt = make_packet(subpayload)
+    ser.write(pkt)
+
+def send_velocity(ser, linear_m_s):
     """
     Send a base control command to Kobuki.
-    We use radius=0 for now so angular is ignored and we only drive straight.
-    (We could encode angular via radius if you want later.)
+    For now we ignore angular and just drive straight with radius=0.
     """
     speed_mm_s = int(linear_m_s * 1000.0)
     radius_mm = 0
@@ -56,6 +65,11 @@ def main():
     ser = serial.Serial(PORT, BAUD, timeout=0.1)
     time.sleep(0.1)
 
+    # TURN MOTORS ON
+    print("Enabling motors...")
+    motors_on(ser, True)
+    time.sleep(0.1)
+
     # Open UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
@@ -65,7 +79,6 @@ def main():
     print(f"Driving Kobuki on {PORT}")
 
     last_linear = 0.0
-    last_angular = 0.0
     last_cmd_time = 0.0
 
     try:
@@ -77,9 +90,8 @@ def main():
                 parts = msg.split()
                 if len(parts) == 2:
                     last_linear = float(parts[0])
-                    last_angular = float(parts[1])
                     last_cmd_time = time.time()
-                # else ignore malformed packets
+                    print(f"RX from {addr}: linear={last_linear:.3f}")
             except BlockingIOError:
                 pass  # no data this loop
 
@@ -88,18 +100,17 @@ def main():
             # Safety: if no command for a while, stop
             if now - last_cmd_time > COMMAND_TIMEOUT:
                 last_linear = 0.0
-                last_angular = 0.0
 
-            # For now we only use linear; angular requires radius encoding
             send_velocity(ser, last_linear)
-
             time.sleep(0.05)  # ~20 Hz
 
     except KeyboardInterrupt:
-        print("Stopping teleop, sending zero velocity.")
+        print("Stopping teleop, sending zero velocity and disabling motors.")
         for _ in range(10):
             send_velocity(ser, 0.0)
             time.sleep(0.05)
+        motors_on(ser, False)
+        time.sleep(0.1)
     finally:
         ser.close()
         sock.close()
