@@ -1,63 +1,102 @@
+#!/usr/bin/env python3
+import pyrealsense2 as rs
+import numpy as np
 import cv2
-from pupil_apriltags import Detector
+import time
+import argparse
+import sys
 
-# --- Configure the AprilTag detector ---
-detector = Detector(
-    families="tag25h9",   # common AprilTag family
-    nthreads=4,
-    quad_decimate=1.0,
-    quad_sigma=0.0,
-    refine_edges=1,
-    decode_sharpening=0.25,
-    debug=0
-)
+def main():
+    parser = argparse.ArgumentParser(
+        description="Record color video from an Intel RealSense camera."
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default="realsense_output.avi",
+        help="Output video file (e.g. realsense_output.avi)",
+    )
+    parser.add_argument(
+        "--duration",
+        "-d",
+        type=float,
+        default=10.0,
+        help="Recording duration in seconds (default: 10)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        help="Frames per second for recording (default: 30)",
+    )
+    args = parser.parse_args()
 
-# --- Open webcam ---
-cap = cv2.VideoCapture(2, cv2.CAP_V4L2) 
+    # Configure RealSense pipeline
+    pipeline = rs.pipeline()
+    config = rs.config()
+    # Use first detected device, enable color stream at 640x480
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, args.fps)
 
-if not cap.isOpened():
-    print("Error: Could not open camera.")
-    exit(1)
+    try:
+        print("[INFO] Starting RealSense pipeline...")
+        pipeline_profile = pipeline.start(config)
 
-print("Press Ctrl+C or close the window to exit.")
+        # Get color stream intrinsics just to confirm resolution
+        color_stream = pipeline_profile.get_stream(rs.stream.color)
+        intr = color_stream.as_video_stream_profile().get_intrinsics()
+        width, height = intr.width, intr.height
+        print(f"[INFO] Color stream: {width}x{height} @ {args.fps} FPS")
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+        # OpenCV video writer
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")  # or "MJPG"
+        out = cv2.VideoWriter(args.output, fourcc, args.fps, (width, height))
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if not out.isOpened():
+            print("[ERROR] Could not open video writer.")
+            pipeline.stop()
+            sys.exit(1)
 
-    # Detect AprilTags
-    results = detector.detect(gray)
+        print(f"[INFO] Recording to {args.output} for {args.duration} seconds...")
+        print("[INFO] Press Ctrl+C to stop early.")
 
-    # Draw detections
-    for r in results:
-        (ptA, ptB, ptC, ptD) = r.corners
-        ptA = tuple(map(int, ptA))
-        ptB = tuple(map(int, ptB))
-        ptC = tuple(map(int, ptC))
-        ptD = tuple(map(int, ptD))
+        start_time = time.time()
 
-        cv2.line(frame, ptA, ptB, (0, 255, 0), 2)
-        cv2.line(frame, ptB, ptC, (0, 255, 0), 2)
-        cv2.line(frame, ptC, ptD, (0, 255, 0), 2)
-        cv2.line(frame, ptD, ptA, (0, 255, 0), 2)
+        while True:
+            # Break on duration
+            if time.time() - start_time > args.duration:
+                print("[INFO] Finished recording duration.")
+                break
 
-        # Draw center
-        cX, cY = int(r.center[0]), int(r.center[1])
-        cv2.circle(frame, (cX, cY), 5, (0, 0, 255), -1)
+            # Wait for a coherent color frame
+            frames = pipeline.wait_for_frames()
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                continue
 
-        # Put tag ID text
-        cv2.putText(frame, f"ID: {r.tag_id}",
-                    (ptA[0], ptA[1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6, (0, 255, 0), 2)
+            # Convert to numpy array
+            color_image = np.asanyarray(color_frame.get_data())
 
-    cv2.imshow("AprilTag Detection", frame)
+            # Write frame to video file
+            out.write(color_image)
 
-    if cv2.waitKey(1) == 27:  # ESC key
-        break
+            # (Optional) Show preview window
+            cv2.imshow("RealSense Color", color_image)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                print("[INFO] 'q' pressed. Stopping recording.")
+                break
 
-cap.release()
-cv2.destroyAllWindows()
+    except KeyboardInterrupt:
+        print("\n[INFO] Keyboard interrupt received. Stopping recording.")
+    finally:
+        print("[INFO] Releasing resources...")
+        try:
+            pipeline.stop()
+        except Exception:
+            pass
+        cv2.destroyAllWindows()
+        if "out" in locals():
+            out.release()
+
+if __name__ == "__main__":
+    main()
